@@ -12,7 +12,7 @@ Prerequisites
 Steps
  - upload .qvf file
  - edit script
- - page Main
- - vServerMainUrl to Qlik cluster's main url
+     - page Main
+     - vServerMainUrl to Qlik cluster's main url
 
  - Create a connection "SendMail"
