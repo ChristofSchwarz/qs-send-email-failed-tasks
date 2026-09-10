@@ -26,6 +26,9 @@ SET vServerMainUrl = 'https://qlikwl';
 // Config to be updated
 // Create a data connection named "SendMail"
 SET vSendMailConnection = [SendMail (dwstw_asccjz)];
+SET vSendMailConnectionType = 'REST'; // this is with Qlik WebConnector Package
+// SET vSendMailConnectionType = 'SMTP'; // this is with Qlik Sense native SMTP connector
+
 // This connection sets most of the parameters:
 
 SET vDefaultEmail = christoph.schwarz2@wienerlinien.at;
@@ -74,31 +77,66 @@ SUB SendMail (_to, _subject, _message, _cc)
         , CHR(10), '<br>')
         , CHR(9), '    ')
         , CHR(13));
-	LET v_priv_OldErrorMode = ErrorMode;
-    LET ErrorMode = 0;
-    LET v_priv_ScriptErrorCount_before = ScriptErrorCount;
+        
+	IF vSendMailConnectionType LIKE 'REST' THEN
+    
+        LET v_priv_OldErrorMode = ErrorMode;
+        LET ErrorMode = 0;
+        LET v_priv_ScriptErrorCount_before = ScriptErrorCount;
 
-    EmailSent:
-    SELECT 
-        "status",
-        "result"
-    FROM 
-        CSV (header on, delimiter ",", quote """") "CSV_source"
+        EmailSent:
+        SELECT 
+            "status",
+            "result"
+        FROM 
+            CSV (header on, delimiter ",", quote """") "CSV_source"
 
-    WITH CONNECTION (
-        QUERY "to" "$(_to)"
-        ,QUERY "subject" "$(v_priv_subject)"
-        ,QUERY "message" "$(v_priv_message)"
-        ,QUERY "cc" "$(_cc)"
-    );
+        WITH CONNECTION (
+            QUERY "to" "$(_to)"
+            ,QUERY "subject" "$(v_priv_subject)"
+            ,QUERY "message" "$(v_priv_message)"
+            ,QUERY "cc" "$(_cc)"
+        );
 
-	LET v_priv_Error = ScriptError;
-	IF ScriptErrorCount > v_priv_ScriptErrorCount_before THEN
-    	TRACE Error when sending mail: $(v_priv_Error);
-        LET vSendMailResponse = 'Error:$(v_priv_Error)';
+        LET v_priv_Error = ScriptError;
+        IF ScriptErrorCount > v_priv_ScriptErrorCount_before THEN
+            TRACE Error when sending mail: $(v_priv_Error);
+            LET vSendMailResponse = 'Error:$(v_priv_Error)';
+        ELSE
+            LET vSendMailResponse = Peek('status', -1, 'EmailSent') & ':' & Peek('result', -1, 'EmailSent');
+        END IF
+
+	ELSEIF vSendMailConnectionType LIKE 'SMTP' THEN
+    
+        LET v_priv_OldErrorMode = ErrorMode;
+        LET ErrorMode = 0;
+        LET v_priv_ScriptErrorCount_before = ScriptErrorCount;
+
+            EmailSent:
+            SELECT status,
+                result
+            FROM SendEmail
+            WITH PROPERTIES (
+                to='$(_to)',
+                subject='$(_subject)',
+                message='$(v_priv_message)',
+                html='true',
+                fromName='$(vFromName)',
+                fromEmail='$(vFromEmail)',
+                cc='$(_cc)',
+                bcc=''
+            );
+
+        LET v_priv_Error = ScriptError;
+        IF ScriptErrorCount > v_priv_ScriptErrorCount_before THEN
+            TRACE Error when sending mail: $(v_priv_Error);
+            LET vSendMailResponse = 'Error:$(v_priv_Error)';
+        ELSE
+            LET vSendMailResponse = Peek('status', -1, 'EmailSent') & ':' & Peek('result', -1, 'EmailSent');
+        END IF
     ELSE
-    	LET vSendMailResponse = Peek('status', -1, 'EmailSent') & ':' & Peek('result', -1, 'EmailSent');
-    END IF
+    	[Error: vSendMailConnectionType variable must be 'SMTP' or 'REST'];
+	END IF
     
 	DISCONNECT;
 
