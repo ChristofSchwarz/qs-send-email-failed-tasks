@@ -1,0 +1,799 @@
+///$tab Main
+SET ThousandSep='.';
+SET DecimalSep=',';
+SET MoneyThousandSep='.';
+SET MoneyDecimalSep=',';
+SET MoneyFormat='#.##0,00 €;-#.##0,00 €';
+SET TimeFormat='hh:mm:ss';
+SET DateFormat='YYYY-MM-DD';
+SET TimestampFormat='YYYY-MM-DD hh:mm:ss[.fff]';
+SET FirstWeekDay=0;
+SET BrokenWeeks=0;
+SET ReferenceDay=4;
+SET FirstMonthOfYear=1;
+SET CollationLocale='de-DE';
+SET CreateSearchIndexOnReload=1;
+SET MonthNames='Jan.;Feb.;März;Apr.;Mai;Juni;Juli;Aug.;Sep.;Okt.;Nov.;Dez.';
+SET LongMonthNames='Januar;Februar;März;April;Mai;Juni;Juli;August;September;Oktober;November;Dezember';
+SET DayNames='Mo.;Di.;Mi.;Do.;Fr.;Sa.;So.';
+SET LongDayNames='Montag;Dienstag;Mittwoch;Donnerstag;Freitag;Samstag;Sonntag';
+SET NumericalAbbreviation='3:k;6:M;9:G;12:T;15:P;18:E;21:Z;24:Y;-3:m;-6:μ;-9:n;-12:p;-15:f;-18:a;-21:z;-24:y';
+
+
+SET vPublicAppId = e8dd9f7a-63f0-405d-b793-5dba0964c7c8; // official, scheduled version of this app
+SET vServerMainUrl = 'https://qlikwl';
+
+// Config to be updated
+// Create a data connection named "SendMail"
+SET vSendMailConnection = [SendMail (dwstw_asccjz)];
+// This connection sets most of the parameters:
+
+SET vDefaultEmail = christoph.schwarz2@wienerlinien.at;
+LET vAllEmailsToDefault = 1; // use 1 for testing, 0 to set emails to app owners
+LET vAllEmailsToDefault = If(DocumentName() = vPublicAppId, 0, 1);
+// LET vUseEmailLog = 1; // use 1 in normal situation so the same failed task will not create multiple emails of the same task-fail occurence
+LET vUseEmailLog = 0; // use 0 for testing only, as it will not remember emails that were already sent
+LET vUseEmailLog = If(DocumentName() = vPublicAppId, 1, 0);
+
+LET vEmailCC =  If(DocumentName() = vPublicAppId, 'r25p.bi@wienerlinien.at', '');
+// LET vEmailCC = ''; // set to emtpy if not needed
+
+LET vScanDaysIntoPast = 14;
+SET vSentEmailsLog = [lib://ArchivedLogsFolder/failedTasksEmails.log];
+SET vNoEmailWhenAppTagged = 'no_email_on_fail';
+LET vManualTasksScan = '*';     // <-- all tasks (including manual triggered ones) are scanned for failure 
+LET vManualTasksScan = 'False'; // <-- only scheduled tasks are scanned for failure 
+
+SET vEmailSubject = 'Qlik Applikation "{{vAppName}}" reload nicht erfolgreich';
+SET vEmailText = `Liebe(r) Qlik-User*in
+
+Du erhältst diese automatische Email als Owner*in 
+der Applikation <a href="$(vServerMainUrl)/sense/app/{{vAppId}}">{{vAppName}}</a>.
+
+Der automatische Reload hat am {{vFailTime}} nicht geklappt.
+Task Name: {{vTaskName}}
+
+Wenn Du kürzlich Dein Passwort geändert hast, bitte aktualisiere dieses auch in Qlik.  
+Sollte dies nicht der Fall sein und Du Unterstützung von uns benötigst, bitten wir Dich um ein Ticket im BI Service Desk. 
+<a href="https://service.wienerlinien.at/jira-wl/plugins/servlet/desk/portal/482/create/2202">Anfrage erstellen</a>
+
+<i>Falls Du den Task Scheduler nicht mehr benötigst, kannst Du diesen einfach über ein BI Service Desk Ticket deaktivieren lassen.</i>
+`;
+///$tab Sub Send Mail
+// Initialize Global variable (below SUB will set it)
+LET vSendMailResponse = '';
+
+
+SUB SendMail (_to, _subject, _message, _cc)
+
+    LIB CONNECT TO '$(vSendMailConnection)';
+
+	LET v_priv_subject = Replace(_subject, '"', '""'); 
+    LET v_priv_message = PurgeChar(Replace(Replace(Replace( _message
+    	, '"', '""')
+        , CHR(10), '<br>')
+        , CHR(9), '    ')
+        , CHR(13));
+	LET v_priv_OldErrorMode = ErrorMode;
+    LET ErrorMode = 0;
+    LET v_priv_ScriptErrorCount_before = ScriptErrorCount;
+
+    EmailSent:
+    SELECT 
+        "status",
+        "result"
+    FROM 
+        CSV (header on, delimiter ",", quote """") "CSV_source"
+
+    WITH CONNECTION (
+        QUERY "to" "$(_to)"
+        ,QUERY "subject" "$(v_priv_subject)"
+        ,QUERY "message" "$(v_priv_message)"
+        ,QUERY "cc" "$(_cc)"
+    );
+
+	LET v_priv_Error = ScriptError;
+	IF ScriptErrorCount > v_priv_ScriptErrorCount_before THEN
+    	TRACE Error when sending mail: $(v_priv_Error);
+        LET vSendMailResponse = 'Error:$(v_priv_Error)';
+    ELSE
+    	LET vSendMailResponse = Peek('status', -1, 'EmailSent') & ':' & Peek('result', -1, 'EmailSent');
+    END IF
+    
+	DISCONNECT;
+
+    IF Alt(TableNumber('EmailSent'), -1) >= 0 THEN 
+    	DROP TABLE EmailSent;
+    ENDIF
+    
+	LET ErrorMode = v_priv_OldErrorMode; 
+    LET v_priv_OldErrorMode = Null(); // delete temp variable
+    LET v_priv_ScriptErrorCount_before = Null();
+	LET v_priv_subject = Null();
+	LET v_priv_message = Null();
+    
+END SUB
+
+
+/*
+// Example:
+CALL SendMail ('christof@universe.org', 'Test Email', 'Test message body');
+TRACE vSendMailResponse = $(vSendMailResponse);
+*/
+
+///$tab Reload Tasks
+LIB CONNECT TO 'monitor_apps_REST_task';
+TRACE *** Loading tasks related infos ...;
+
+
+RestConnectorMasterTable:
+SQL SELECT 
+	"id" AS "id_u4",
+	"createdDate",
+	"modifiedDate",
+	"modifiedByUserName",
+	"path",
+	"parameters",
+	"qlikUser",
+	"name" AS "name_u1",
+	"taskType",
+	"enabled",
+	"taskSessionTimeout",
+	"maxRetries",
+	"privileges" AS "privileges_u4",
+	"schemaPath",
+	"isManuallyTriggered",
+	"isPartialReload",
+	"__task_KEY_root",
+	(SELECT 
+		"@Value",
+		"__task_FK_customProperties"
+	FROM "customProperties" FK "__task_FK_customProperties" ArrayValueAlias "@Value"),
+	(SELECT 
+		"id" AS "id_u1",
+		"nextExecution",
+		"privileges" AS "privileges_u1",
+		"__task_KEY_operational",
+		"__task_FK_operational",
+		(SELECT 
+			"id" AS "id_u0",
+			"executingNodeName",
+			"status",
+			"startTime",
+			"stopTime",
+			"duration",
+			"fileReferenceID",
+			"scriptLogAvailable",
+			"scriptLogLocation",
+			"scriptLogSize",
+			"privileges" AS "privileges_u0",
+			"__task_KEY_lastExecutionResult",
+			"__task_FK_lastExecutionResult",
+			(SELECT 
+				"id",
+				"detailsType",
+				"message",
+				"detailCreatedDate",
+				"privileges",
+				"__task_FK_details"
+			FROM "details" FK "__task_FK_details")
+		FROM "lastExecutionResult" PK "__task_KEY_lastExecutionResult" FK "__task_FK_lastExecutionResult")
+	FROM "operational" PK "__task_KEY_operational" FK "__task_FK_operational"),
+	(SELECT 
+		"@Value" AS "@Value_u0",
+		"__task_FK_tags"
+	FROM "tags" FK "__task_FK_tags" ArrayValueAlias "@Value_u0"),
+	(SELECT 
+		"id" AS "id_u3",
+		"name" AS "name_u0",
+		"appId",
+		"publishTime",
+		"published",
+		"savedInProductVersion",
+		"migrationHash",
+		"availabilityStatus",
+		"privileges" AS "privileges_u3",
+		"stream",
+		"__task_KEY_app",
+		"__task_FK_app",
+		(SELECT 
+			"id" AS "id_u2",
+			"name",
+			"privileges" AS "privileges_u2",
+			"__task_FK_stream"
+		FROM "stream" FK "__task_FK_stream")
+	FROM "app" PK "__task_KEY_app" FK "__task_FK_app")
+FROM JSON (wrap on) "root" PK "__task_KEY_root";
+
+QUALIFY '*';
+UNQUALIFY '__*', '*.*';
+
+
+[task]:
+LOAD	
+	[id_u4] AS [id],
+// 	[createdDate],
+// 	[modifiedDate],
+// 	[modifiedByUserName],
+	[path],
+	[parameters],
+// 	[qlikUser],
+	[name_u1] AS [name],
+	[taskType],
+	[enabled],
+	[taskSessionTimeout],
+	[maxRetries],
+// 	[privileges_u4] AS [privileges_u4],
+// 	[schemaPath],
+	[isManuallyTriggered],
+// 	[isPartialReload],
+	[__task_KEY_root]
+RESIDENT 
+	RestConnectorMasterTable
+WHERE 
+	NOT IsNull([__task_KEY_root]);
+
+// [customProperties]:
+// LOAD	[@Value],
+// 	[__task_FK_customProperties] AS [__task_KEY_root]
+// RESIDENT RestConnectorMasterTable
+// WHERE NOT IsNull([__task_FK_customProperties]);
+
+
+// [details]:
+// LOAD	[id],
+// 	[detailsType],
+// 	[message],
+// 	[detailCreatedDate],
+// 	[privileges],
+// 	[__task_FK_details] AS [__task_KEY_lastExecutionResult]
+// RESIDENT RestConnectorMasterTable
+// WHERE NOT IsNull([__task_FK_details]);
+
+
+
+[operational]:
+LOAD	
+	[id_u1] AS [id],
+	[nextExecution],
+	[privileges_u1] AS [privileges_u1],
+	[__task_KEY_operational],
+	[__task_FK_operational] AS [__task_KEY_root]
+RESIDENT 
+	RestConnectorMasterTable
+WHERE 
+	NOT IsNull([__task_FK_operational]);
+
+[lastExecutionResult]:
+LEFT JOIN (operational)
+LOAD	
+	[id_u0]              AS lastExecution.id,
+	[executingNodeName]  AS lastExecution.executingNodeName,
+	[status]             AS lastExecution.status,
+	[startTime]          AS lastExecution.startTime,
+	[stopTime]           AS lastExecution.stopTime,
+    Now() - stopTime     AS lastExecution.daysAgo,
+	[duration]           AS lastExecution.duration,
+// 	[fileReferenceID]    AS lastExecution.fileReferenceID,
+	[scriptLogAvailable] AS lastExecution.scriptLogAvailable,
+	[scriptLogLocation]  AS lastExecution.scriptLogLocation,
+	[scriptLogSize]      AS lastExecution.scriptLogSize,
+// 	[privileges_u0] AS [privileges_u0],
+	[__task_KEY_lastExecutionResult],
+	[__task_FK_lastExecutionResult] AS [__task_KEY_operational]
+RESIDENT 
+	RestConnectorMasterTable
+WHERE 
+	NOT IsNull([__task_FK_lastExecutionResult]);
+
+
+// [tags]:
+// LOAD	[@Value_u0] AS [@Value_u0],
+// 	[__task_FK_tags] AS [__task_KEY_root]
+// RESIDENT RestConnectorMasterTable
+// WHERE NOT IsNull([__task_FK_tags]);
+
+
+// [stream]:
+// LOAD	[id_u2] AS [id_u2],
+// 	[name],
+// 	[privileges_u2] AS [privileges_u2],
+// 	[__task_FK_stream] AS [__task_KEY_app]
+// RESIDENT RestConnectorMasterTable
+// WHERE NOT IsNull([__task_FK_stream]);
+
+
+[reloadedApp]:
+LOAD	
+	[id_u3] AS [app.id],
+// 	[name_u0] AS [app.name],
+// 	[appId],
+// 	[publishTime],
+// 	[published],
+// 	[savedInProductVersion],
+// 	[migrationHash],
+// 	[availabilityStatus],
+// 	[privileges_u3] AS [privileges_u3],
+// 	[stream],
+	[__task_KEY_app],
+	[__task_FK_app] AS [__task_KEY_root]
+RESIDENT 
+	RestConnectorMasterTable
+WHERE 
+	NOT IsNull([__task_FK_app]);
+
+
+
+
+DROP TABLE RestConnectorMasterTable;
+
+UNQUALIFY '*';
+
+
+
+///$tab User Email Mapping
+LIB CONNECT TO 'monitor_apps_REST_user';
+TRACE *** Loading user related infos ...;
+
+UNQUALIFY '*';
+
+RestConnectorMasterTable:
+SQL SELECT 
+	"id" AS "id_u0",
+	"createdDate" AS "createdDate_u0",
+	"modifiedDate" AS "modifiedDate_u0",
+	"modifiedByUserName" AS "modifiedByUserName_u0",
+	"userId",
+	"userDirectory",
+	"userDirectoryConnectorName",
+	"name",
+	"inactive",
+	"removedExternally",
+	"blacklisted",
+	"deleteProhibited",
+	"privileges",
+	"schemaPath" AS "schemaPath_u0",
+	"__KEY_root",
+	(SELECT 
+		"id",
+		"createdDate",
+		"modifiedDate",
+		"modifiedByUserName",
+		"attributeType",
+		"attributeValue",
+		"externalId",
+		"schemaPath",
+		"__FK_attributes"
+	FROM "attributes" FK "__FK_attributes")
+FROM JSON (wrap on) "root" PK "__KEY_root";
+
+// QUALIFY '*';
+// UNQUALIFY '__*', '*.*';
+
+[user]:
+LOAD	
+	[id_u0] AS [user.id],
+// 	[createdDate_u0] AS [createdDate_u0],
+// 	[modifiedDate_u0] AS [modifiedDate_u0],
+// 	[modifiedByUserName_u0] AS [modifiedByUserName_u0],
+// 	[userId],
+// 	[userDirectory],
+// 	[userDirectoryConnectorName],
+// 	[name],
+// 	[inactive],
+// 	[removedExternally],
+// 	[blacklisted],
+// 	[deleteProhibited],
+// 	[privileges],
+// 	[schemaPath_u0] AS [schemaPath_u0],
+	[__KEY_root]
+RESIDENT RestConnectorMasterTable
+WHERE NOT IsNull([__KEY_root]);
+
+
+[attributes]:
+LEFT JOIN (user)
+LOAD
+// 	[id],
+// 	[createdDate],
+// 	[modifiedDate],
+// 	[modifiedByUserName],
+// 	[attributeType],
+	[attributeValue] AS user.email,
+// 	[externalId],
+// 	[schemaPath],
+	[__FK_attributes] AS [__KEY_root]
+RESIDENT 
+	RestConnectorMasterTable
+WHERE 
+	NOT IsNull([__FK_attributes])
+    AND attributeType LIKE 'Email';
+
+
+DROP FIELD [__KEY_root] FROM user;
+
+DROP TABLE RestConnectorMasterTable;
+
+// UNQUALIFY '*';
+
+MapEmailForUserGUID:
+MAPPING LOAD
+	user.id
+    ,user.email
+RESIDENT
+	user
+WHERE
+	Len(user.email);
+    
+DROP TABLE user;
+
+///$tab App Info
+LIB CONNECT TO 'monitor_apps_REST_app';
+TRACE *** Loading apps related infos ...;
+
+UNQUALIFY *;
+
+RestConnectorMasterTable:
+SQL SELECT 
+	"id" AS "id_u4",
+	"createdDate" AS "createdDate_u0",
+	"modifiedDate" AS "modifiedDate_u0",
+	"modifiedByUserName" AS "modifiedByUserName_u0",
+	"name" AS "name_u3",
+	"appId",
+	"sourceAppId",
+	"targetAppId",
+	"publishTime",
+	"published",
+	"description",
+	"stream",
+	"fileSize",
+	"lastReloadTime",
+	"thumbnail",
+	"savedInProductVersion",
+	"migrationHash",
+	"dynamicColor",
+	"availabilityStatus",
+	"lastDataDistribution",
+	"privileges" AS "privileges_u3",
+	"schemaPath" AS "schemaPath_u0",
+	"__app_KEY_root",
+	(SELECT 
+		"id" AS "id_u0",
+		"createdDate",
+		"modifiedDate",
+		"modifiedByUserName",
+		"value",
+		"schemaPath",
+		"__app_KEY_customProperties",
+		"__app_FK_customProperties",
+		(SELECT 
+			"id",
+			"name",
+			"valueType",
+			"privileges",
+			"__app_KEY_definition",
+			"__app_FK_definition",
+			(SELECT 
+				"@Value",
+				"__app_FK_choiceValues"
+			FROM "choiceValues" FK "__app_FK_choiceValues" ArrayValueAlias "@Value")
+		FROM "definition" PK "__app_KEY_definition" FK "__app_FK_definition")
+	FROM "customProperties" PK "__app_KEY_customProperties" FK "__app_FK_customProperties"),
+	(SELECT 
+		"id" AS "id_u1",
+		"userId",
+		"userDirectory",
+		"userDirectoryConnectorName",
+		"name" AS "name_u0",
+		"privileges" AS "privileges_u0",
+		"__app_FK_owner"
+	FROM "owner" FK "__app_FK_owner"),
+	(SELECT 
+		"id" AS "id_u2",
+		"name" AS "name_u1",
+		"privileges" AS "privileges_u1",
+		"__app_FK_tags"
+	FROM "tags" FK "__app_FK_tags"),
+	(SELECT 
+		"id" AS "id_u3",
+		"name" AS "name_u2",
+		"privileges" AS "privileges_u2",
+		"__app_FK_stream"
+	FROM "stream" FK "__app_FK_stream")
+FROM JSON (wrap on) "root" PK "__app_KEY_root";
+
+// Parse the JSON response into tables
+
+
+[app]:
+LOAD	
+	[id_u4] AS [app.id],
+// 	[createdDate_u0] AS [createdDate],
+// 	[modifiedDate_u0] AS [modifiedDate],
+// 	[modifiedByUserName_u0] AS [modifiedByUserName],
+	[name_u3] AS [app.name],
+// 	[appId],
+// 	[sourceAppId],
+// 	[targetAppId],
+// 	[publishTime],
+	[published] AS app.published,
+	[description] AS app.description,
+// 	[stream],
+// 	[fileSize],
+	[lastReloadTime] AS app.lastReloadTime,
+// 	[thumbnail],
+// 	[savedInProductVersion],
+// 	[migrationHash],
+// 	[dynamicColor],
+// 	[availabilityStatus],
+// 	[lastDataDistribution],
+// 	[privileges_u3] AS [privileges],
+// 	[schemaPath_u0] AS [schemaPath],
+	[__app_KEY_root]
+RESIDENT 
+	RestConnectorMasterTable
+WHERE 
+	NOT IsNull([__app_KEY_root]);
+
+
+/*
+[choiceValues]:
+LOAD	
+	[@Value],
+	[__app_FK_choiceValues] AS [__app_KEY_definition]
+RESIDENT RestConnectorMasterTable
+WHERE NOT IsNull([__app_FK_choiceValues]);
+*/
+
+
+
+[customProperties]:
+LOAD	
+// 	[id_u0] AS [id],
+// 	[createdDate],
+// 	[modifiedDate],
+// 	[modifiedByUserName],
+	[value] AS app.customProperties.value,
+// 	[schemaPath],
+	[__app_KEY_customProperties],
+	[__app_FK_customProperties] AS [__app_KEY_root]
+RESIDENT RestConnectorMasterTable
+WHERE NOT IsNull([__app_FK_customProperties]);
+
+[definition]:
+LEFT JOIN (customProperties) 
+LOAD
+// 	[id],
+	[name] AS app.customProperties.name,
+// 	[valueType],
+// 	[privileges],
+// 	[__app_KEY_definition],
+	[__app_FK_definition] AS [__app_KEY_customProperties]
+RESIDENT RestConnectorMasterTable
+WHERE NOT IsNull([__app_FK_definition]);
+
+[owner]:
+LEFT JOIN (app)
+LOAD	
+// JOIN ON
+	[__app_FK_owner] AS [__app_KEY_root],
+// Add fields
+// 	[id_u1] AS [owner.id],
+    ApplyMap('MapEmailForUserGUID', id_u1, '$(vDefaultOwner)') AS app.owner.email,
+	[userId] AS app.owner.userId,
+	[userDirectory] AS app.owner.userDirectory,
+// 	[userDirectoryConnectorName],
+	[name_u0] AS [app.owner.name]
+// 	[privileges_u0] AS [privileges],
+RESIDENT 
+	RestConnectorMasterTable
+WHERE 
+	NOT IsNull([__app_FK_owner]);
+
+
+[tags]:
+LOAD	
+	[id_u2] AS [app.tag.id],
+	[name_u1] AS [app.tag.name],
+// 	[privileges_u1] AS [privileges],
+	[__app_FK_tags] AS [__app_KEY_root]
+RESIDENT 
+	RestConnectorMasterTable
+WHERE 
+	NOT IsNull([__app_FK_tags]);
+
+
+[stream]:
+LEFT JOIN (app) 
+LOAD	
+// JOIN ON 
+	[__app_FK_stream] AS [__app_KEY_root],
+// Add fields
+	[id_u3] AS [stream.id],
+	[name_u2] AS [stream.name]
+// 	[privileges_u2] AS [privileges],
+RESIDENT 
+	RestConnectorMasterTable
+WHERE 
+	NOT IsNull([__app_FK_stream]);
+
+
+DROP TABLE RestConnectorMasterTable;
+
+UNQUALIFY *;
+
+
+
+
+
+///$tab Final data model
+// move all attributes of app into reloadedApp
+
+LEFT JOIN (reloadedApp)
+LOAD * RESIDENT app;
+
+DROP TABLE app;
+
+LEFT JOIN (task)
+LOAD * RESIDENT operational;
+
+DROP TABLE operational;
+
+
+LET vRowsBefore = NoOfRows('task');
+
+LEFT JOIN (task)
+LOAD * RESIDENT reloadedApp;
+
+DROP TABLE reloadedApp;
+
+IF NoOfRows('task') <> vRowsBefore THEN
+	[Error: left join of reloadedApp table into task led to a unexpected duplication of rows.];
+END IF
+
+
+// Join all app custom properties into one cell in the syntax @property1=value1;@property2=value2 
+LEFT JOIN (task)
+LOAD
+	__app_KEY_root
+    ,Concat('@' & app.customProperties.name & '=' & app.customProperties.value, ';') AS app.customProperties
+RESIDENT
+	customProperties
+GROUP BY
+	__app_KEY_root;
+    
+    
+LEFT JOIN (task)
+LOAD
+	__app_KEY_root
+    ,Concat('(' & app.tag.name & ')', '') AS app.tags
+RESIDENT
+	tags
+GROUP BY
+	__app_KEY_root;
+    
+
+DROP FIELDS __task_KEY_app, __app_KEY_customProperties;
+
+///$tab Main Email Logic
+// Make a copy of the task table filtered to the rows to act upon
+
+statusLegend:
+LOAD * INLINE [
+	lastExecution.status, statusText, statusColor
+	8, Failed, red
+    7, Success, green
+];
+
+LET vEmailsSent = 0;
+LET vEmailsErrors = 0;
+
+sentEmailsLog: 
+LOAD * INLINE [executionId, executionFailedOn, appId, appName, appOwner, email, emailedOn];
+
+IF Alt(FileTime(vSentEmailsLog), 0) AND vUseEmailLog THEN
+	CONCATENATE (sentEmailsLog)
+    LOAD 
+    	*
+    FROM 
+    	[$(vSentEmailsLog)] (txt, utf8, delimiter is '\t', embedded labels);
+END IF
+
+QUALIFY *;
+UNQUALIFY '__task_KEY_Root';
+
+[$]:
+LOAD 
+	*
+RESIDENT
+	task
+WHERE  // all the conditions that are checked to decide if email should be sent
+
+	NOT Exists(executionId, lastExecution.id)
+	AND task.taskType = 0 // type: App-Reload-task
+    AND task.isManuallyTriggered LIKE '$(vManualTasksScan)' 
+    AND lastExecution.status = 8 // failed tasks
+    AND NOT app.tags LIKE '*($(vNoEmailWhenAppTagged))*'
+    AND lastExecution.daysAgo <= $(vScanDaysIntoPast)
+;
+    
+UNQUALIFY *;
+
+IF NoOfRows('$') = 0 THEN
+
+	TRACE Good news: No (new) failed tasks were found;
+    
+ELSE
+
+    FOR vRow = 0 TO (NoOfRows('$') - 1);
+
+	// Try to get the log (future enhancement)
+    
+    // https://qlikwl/qrs/ReloadTask/a24d752f-334b-4022-8010-cb55e8fbc7e6/scriptlogfile?executionResultId=571e6deb-f462-4ead-bc16-558cc602f612&xrfkey=OIZ4jOCUWtcPhdNT
+    
+    
+    // Send email
+    
+        LET vEmail       =           Peek('$.app.owner.email'       , vRow, '$');  
+        LET vExecutionId =           Peek('$.lastExecution.id'      , vRow, '$');
+        LET vTaskName    =           Peek('$.task.name'             , vRow, '$');
+        LET vAppName     =           Peek('$.app.name'              , vRow, '$');
+        LET vAppId       =           Peek('$.app.id'                , vRow, '$');
+        LET vAppOwner    =           Peek('$.app.owner.name'        , vRow, '$');
+        LET vFailTime    = Timestamp(Peek('$.lastExecution.stopTime', vRow, '$'), 'YYYY-MM-DD hh:mm:ss');
+
+        IF NOT vEmail LIKE '*@*' OR vAllEmailsToDefault THEN 
+        	TRACE No email of app owner found, using Default Email instead ...;
+            LET vEmail = vDefaultEmail; 
+        END IF
+        
+        TRACE Email to $(vEmail), that app "$(vAppName)" reload failed on $(vFailTime);
+        
+        LET vMsgSubject = Replace(Replace(Replace(Replace(vEmailSubject
+        	,'{{vAppName}}', vAppName)
+            ,'{{vFailTime}}', vFailTime)
+            ,'{{vTaskName}}', vTaskName)
+            ,'{{vAppId}}', vAppId);        
+            
+		LET vMsgBody = Replace(Replace(Replace(Replace(vEmailText
+        	,'{{vAppName}}', vAppName)
+            ,'{{vFailTime}}', vFailTime)
+            ,'{{vTaskName}}', vTaskName)
+            ,'{{vAppId}}', vAppId);
+
+        CALL SendMail (vEmail, vMsgSubject, vMsgBody, vEmailCC);
+        
+        IF vSendMailResponse LIKE 'ok:*' THEN
+        
+            CONCATENATE (sentEmailsLog)
+            LOAD 
+                '$(vExecutionId)'                        AS executionId
+                ,'$(vFailTime)'                          AS executionFailedOn
+                ,'$(vAppName)'                           AS appName
+                ,'$(vAppId)'                             AS appId
+                ,'$(vAppOwner)'                          AS appOwner
+                ,'$(vEmail)'                             AS email
+                ,Timestamp(Now(), 'YYYY-MM-DD hh:mm:ss') AS emailedOn
+            AUTOGENERATE(1);
+        	LET vEmailsSent = vEmailsSent + 1;
+
+        ELSE
+        	TRACE --------------------;
+            TRACE Error Sending Email: $(vSendMailResponse);
+            TRACE --------------------;
+            LET vEmailsErrors = vEmailsErrors + 1;
+		ENDIF
+        
+    NEXT vRow;
+
+
+    // Save new log
+    STORE sentEmailsLog INTO [$(vSentEmailsLog)] (txt,  delimiter is '\t');
+
+END IF
+DROP TABLE [$];
+
+///$tab Exit Script
+;
+EXIT SCRIPT;
