@@ -1,12 +1,4 @@
-# qs-send-email-failed-tasks
-Send Emails to app owners if a reload task fails.
-
-The app can work in two ways
- - using Qlik Sense native's SMTP Connection
- - using Qlik Web Connector Package as wrapping service (and a REST connection to the connector)
-
-The first option is recommended (no additional software needed), but some settings are not available - for example unauthenticated SMTP servers or using port 25.
-The script variable `vSendMailConnectionType` decides which method to use.
+# Setup using Qlik Sense built-in SMTP Connection
 
 Prerequisites
  - Setup and configure Qlik SMTP Connection
