@@ -10,12 +10,11 @@ Go to the console of Qlik Web Connectors (http://localhost:5555/web/connector/SM
 |-|-|-|-|
 |connectorID|SMTPConnector|fix||	 
 |table|SendEmail|fix||	 
-SMTPServer	wit-mx.wienit.at	change if needed	 
-Port	25	change if needed	 
-SSLmode	None	change if needed	 
-to	Patel.DHRUVKUMAR.extern@wienerlinien.at	test during setup	X
-cc	
-test during setup	X
+|SMTPServer|your.server.com|change if needed||	 
+|Port|25|change if needed	 ||
+|SSLmode|None|change if needed||	 
+|to|Patel.DHRUVKUMAR.extern@wienerlinien.at|test during setup|X|
+|cc||test during setup|X|
 subject	Test from Qlik Sense Data Connection	test during setup	X
 message	Sent while editing Data Connection	test during setup	X
 html	True	fix	 
