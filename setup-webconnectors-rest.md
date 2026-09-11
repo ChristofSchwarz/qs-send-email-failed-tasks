@@ -24,12 +24,13 @@ Go to the console of Qlik Web Connectors (http://localhost:5555/web/connector/SM
 
 Create a data connection of type REST. This is to communicate with the Qlik WebConnector Service, which wraps the SMTP sending of the mail.
 
-We tell every parameter via a Query Parameter, so below is a long list of what you need to provide to work. 
+We tell every parameter via a Query Parameter, so below is a long list of what you need to provide in order to work via Qlik WebConnectors SMTP wrapper. 
 
-Four parameters will later be set by the load script, so they have only temporary character during the creation of the data connection. However most parameters are taken for all the messages being sent, they act as a general default
+Only 4 parameters will later be set by the load script, so they have only temporary character during the creation of the data connection. However most parameters are taken for all the messages being sent, they act as a general default
 
 <img width="630" height="755" alt="image" src="https://github.com/user-attachments/assets/df0f016e-d0d7-4b98-8cf0-8ba7d7631481" />
 
+ - Create a list of Query Parameters in the new Data Connection
  
 | Query Parameter	| Value |	Comment |	Set by script |
 |-|-|-|-|
@@ -44,7 +45,7 @@ Four parameters will later be set by the load script, so they have only temporar
 |message|Sent while editing Data Connection|test during setup|X|
 |html|True|fix||	 
 |fromName|Qlik Sense|change if needed	||
-|fromEmail|r25p.bi@wienerlinien.at|change if needed	||
+|fromEmail|sender@ycompany.com|change if needed	||
 |delayInSeconds|0|fix||	 
 |ignoreProxy|False|change if needed	 ||
 |format|csv|fix||	 
@@ -52,7 +53,8 @@ Four parameters will later be set by the load script, so they have only temporar
 |UserName|smtp.user|change if needed||
 |Password|smtp_user_password|change if needed||
 
-**Note** you must enable "allow WITH CONNECTION" 
+ -  **Note** you must enable "allow WITH CONNECTION" 
 
+Save the data connection. If successful, will release already the first email to the inbox defined under "to".
 
 
