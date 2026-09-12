@@ -44,9 +44,9 @@ Only 4 parameters will later be set by the load script, so they have only tempor
 |subject|Test Subject|test during setup|X|
 |message|Text Message Body|test during setup|X|
 |html|True|fix||	 
-|fromName|Qlik Sense|change if needed||
-|fromEmail|sender@ycompany.com|change if needed	||
-|delayInSeconds|0|hange if needed||	 
+|fromName|Qlik Sense|change to requested||
+|fromEmail|sender@company.com|change to requested||
+|delayInSeconds|0|change if needed||	 
 |ignoreProxy|False|change if needed||
 |format|csv|fix||	 
 |loadAccessToken|1h7jh3i6h3o7k|copy from WebConnector setup||
