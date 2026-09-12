@@ -36,22 +36,22 @@ Only 4 parameters will later be set by the load script, so they have only tempor
 |-|-|-|-|
 |connectorID|SMTPConnector|fix||	 
 |table|SendEmail|fix||	 
-|SMTPServer|your.server.com|change if needed||	 
-|Port|25|change if needed	 ||
-|SSLmode|None|change if needed||	 
+|SMTPServer|your.server.com|change to requested||	 
+|Port|25|change to requested||
+|SSLmode|None/Implicit/Explicit|change to requested||	 
 |to|test.recipient@company.com|test during setup|X|
 |cc||test during setup|X|
-|subject|Test from Qlik Sense Data Connection|test during setup|X|
-|message|Sent while editing Data Connection|test during setup|X|
+|subject|Test Subject|test during setup|X|
+|message|Text Message Body|test during setup|X|
 |html|True|fix||	 
-|fromName|Qlik Sense|change if needed	||
+|fromName|Qlik Sense|change if needed||
 |fromEmail|sender@ycompany.com|change if needed	||
-|delayInSeconds|0|fix||	 
-|ignoreProxy|False|change if needed	 ||
+|delayInSeconds|0|hange if needed||	 
+|ignoreProxy|False|change if needed||
 |format|csv|fix||	 
-|loadAccessToken|1h7jh3i6h3o7k|copy from previous setup	 ||
-|UserName|smtp.user|change if needed||
-|Password|smtp_user_password|change if needed||
+|loadAccessToken|1h7jh3i6h3o7k|copy from WebConnector setup||
+|UserName|smtp.user|change to requested||
+|Password|smtp_user_password|change to requested||
 
  -  **Note** you must enable "allow WITH CONNECTION" 
 
